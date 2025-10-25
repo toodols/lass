@@ -9,6 +9,10 @@ TextLabel, TextButton
 	.title
 		FontFace: Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
 
+ImageLabel
+	&:Hover
+		ImageTransparency: 0.5
+
 // funny
 .a, .b
 	.c, .d

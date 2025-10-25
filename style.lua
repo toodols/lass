@@ -32,10 +32,21 @@ style_rule_2:SetProperties{
 local style_rule_3 = Instance.new "StyleRule"
 style_rule_3.Parent = style_sheet
 table.insert(style_rules, style_rule_3)
-style_rule_3.Selector = ".a >> .c >> .e, .a >> .c >> .f, .a >> .d >> .e, .a >> .d >> .f, .b >> .c >> .e, .b >> .c >> .f, .b >> .d >> .e, .b >> .d >> .f"
+style_rule_3.Selector = "ImageLabel:Hover"
 style_rule_3.Priority = 0
 style_rule_3:SetProperties{
+	["ImageTransparency"] = 0.5
+}
+
+local style_rule_4 = Instance.new "StyleRule"
+style_rule_4.Parent = style_sheet
+table.insert(style_rules, style_rule_4)
+style_rule_4.Selector = ".a >> .c >> .e, .a >> .c >> .f, .a >> .d >> .e, .a >> .d >> .f, .b >> .c >> .e, .b >> .c >> .f, .b >> .d >> .e, .b >> .d >> .f"
+style_rule_4.Priority = 0
+style_rule_4:SetProperties{
 	["TextColor3"] = Color3.fromRGB(255,255,255)
 }
 
 style_sheet:SetStyleRules(style_rules)
+
+return style_sheet

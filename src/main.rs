@@ -23,12 +23,15 @@ struct StyleRule {
     declarations: Vec<StyleDeclaration>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Selector {
     Class(String), // .class
     Id(String),    // #id
     Tag(String),   // tag
-    Parent,        // &
+    // Unfortunately Parent has to be right associative because otherwise doing
+    // The product is a hassle
+    Parent(Box<Selector>), // &
+    Empty,
     PseudoClass(Box<Selector>, String),
     Operation {
         left: Box<Selector>,
@@ -36,6 +39,7 @@ enum Selector {
         right: Box<Selector>,
     },
     Compound(Vec<Selector>),
+    PseudoInstance(Box<Selector>, String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,7 +47,6 @@ enum Combinator {
     Or,
     Child,
     Descendant,
-    Phantom,
 }
 
 impl Combinator {
@@ -51,14 +54,13 @@ impl Combinator {
         0
     }
     fn max_precedence() -> u8 {
-        2
+        1
     }
     fn precedence(&self) -> u8 {
         match self {
             Combinator::Or => 0,
             Combinator::Descendant => 1,
             Combinator::Child => 1,
-            Combinator::Phantom => 2,
         }
     }
 }
@@ -164,16 +166,20 @@ fn simple_selector(input: &str) -> IResult<&str, Selector> {
         preceded(tag("."), identifier).map(|name| Selector::Class(name.to_string())),
         preceded(tag("#"), identifier).map(|name| Selector::Id(name.to_string())),
         identifier.map(|name: &str| Selector::Tag(name.to_string())),
-        tag("&").map(|_| Selector::Parent),
     ))
-    .parse(input)?;
+    .parse(input)
+    .unwrap_or((input, Selector::Empty));
     if let (input, Some(pseudo_class)) = opt(preceded(tag(":"), identifier)).parse(input)? {
         Ok((
             input,
             Selector::PseudoClass(Box::new(selector), pseudo_class.to_string()),
         ))
     } else {
-        Ok((input, selector))
+        if selector == Selector::Empty {
+            Err(nom::Err::Incomplete(nom::Needed::new(1)))
+        } else {
+            Ok((input, selector))
+        }
     }
 }
 
@@ -182,6 +188,8 @@ fn ws(input: &str) -> IResult<&str, &str> {
 }
 
 fn compound_selector(input: &str) -> IResult<&str, Selector> {
+    let (input, parent) = opt(tag("&")).parse(input)?;
+
     let mut selectors = Vec::new();
 
     let (input, selector) = simple_selector(input)?;
@@ -195,7 +203,22 @@ fn compound_selector(input: &str) -> IResult<&str, Selector> {
             break;
         };
     }
-    Ok((input, Selector::Compound(selectors)))
+    if selectors.len() == 1 {
+        if parent.is_some() {
+            Ok((input, Selector::Parent(Box::new(selectors.pop().unwrap()))))
+        } else {
+            Ok((input, selectors.pop().unwrap()))
+        }
+    } else {
+        if parent.is_some() {
+            Ok((
+                input,
+                Selector::Parent(Box::new(Selector::Compound(selectors))),
+            ))
+        } else {
+            Ok((input, Selector::Compound(selectors)))
+        }
+    }
 }
 
 fn comment(input: &str) -> IResult<&str, &str> {
@@ -204,12 +227,11 @@ fn comment(input: &str) -> IResult<&str, &str> {
 }
 
 fn selector_combinator(input: &str) -> IResult<&str, Combinator> {
-    alt((tag(">"), tag(">>"), tag(","), tag("::")))
+    alt((tag(">"), tag(">>"), tag(",")))
         .map(|s: &str| match s {
             ">" => Combinator::Child,
             ">>" => Combinator::Descendant,
             "," => Combinator::Or,
-            "::" => Combinator::Phantom,
             _ => unreachable!(),
         })
         .parse(input)
@@ -273,11 +295,15 @@ fn selector_disjunctions_product(left: Vec<Selector>, right: Vec<Selector>) -> V
     let mut result = Vec::new();
     for l in left.iter() {
         for r in right.iter() {
-            result.push(Selector::Operation {
-                left: Box::new(l.clone()),
-                operator: Combinator::Descendant,
-                right: Box::new(r.clone()),
-            });
+            dbg!(&l, &r);
+            match r {
+                Selector::Parent(r) => result.push(Selector::Compound(vec![l.clone(), *r.clone()])),
+                _ => result.push(Selector::Operation {
+                    left: Box::new(l.clone()),
+                    operator: Combinator::Descendant,
+                    right: Box::new(r.clone()),
+                }),
+            }
         }
     }
     result
@@ -435,7 +461,8 @@ fn codegen_selector<W: Write>(selector: &Selector, writer: &mut W) {
         Selector::Class(name) => write!(writer, ".{name}").unwrap(),
         Selector::Id(name) => write!(writer, "#{name}").unwrap(),
         Selector::Tag(name) => write!(writer, "{name}").unwrap(),
-        Selector::Parent => write!(writer, "&").unwrap(),
+        Selector::Parent(_) => unreachable!("noo"),
+        Selector::Empty => {}
         Selector::Compound(selectors) => {
             for selector in selectors {
                 codegen_selector(selector, &mut *writer);
@@ -444,6 +471,10 @@ fn codegen_selector<W: Write>(selector: &Selector, writer: &mut W) {
         Selector::PseudoClass(selector, name) => {
             codegen_selector(selector, &mut *writer);
             write!(writer, ":{name}").unwrap();
+        }
+        Selector::PseudoInstance(selector, name) => {
+            codegen_selector(selector, &mut *writer);
+            write!(writer, "::{name}").unwrap();
         }
         Selector::Operation {
             left,
@@ -455,7 +486,6 @@ fn codegen_selector<W: Write>(selector: &Selector, writer: &mut W) {
                 Combinator::Or => write!(writer, ", ").unwrap(),
                 Combinator::Child => write!(writer, " > ").unwrap(),
                 Combinator::Descendant => write!(writer, " >> ").unwrap(),
-                Combinator::Phantom => write!(writer, "::").unwrap(),
             }
             codegen_selector(right, &mut *writer);
         }
@@ -566,7 +596,6 @@ fn main() {
         }
     }
     let style_rules = root_tree_to_style_rules(&root);
-
     let mut file = std::fs::File::create(args.out.unwrap_or("out.lua".to_owned()))
         .expect("Failed to create output file");
     codegen(&mut file, style_rules);

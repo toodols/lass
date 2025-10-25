@@ -52,6 +52,19 @@ style_rule_6.Priority = 1
 style_rule_6:SetProperties{
 	["ImageTransparency"] = 0.5
 }
+
+local style_rule_7 = Instance.new "StyleRule"
+style_rule_7.Parent = style_sheet
+table.insert(style_rules, style_rule_7)
+style_rule_7.Selector = ".a, .b"
+
+local style_rule_8 = Instance.new "StyleRule"
+style_rule_8.Parent = style_rule_7
+table.insert(style_rules, style_rule_8)
+style_rule_8.Selector = ".h, .j"
+style_rule_8:SetProperties{
+	["E"] = 1
+}
 style_sheet:SetStyleRules(style_rules)
 
 return style_sheet

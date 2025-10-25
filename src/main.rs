@@ -259,7 +259,6 @@ fn selector(input: &str) -> IResult<&str, Selector> {
         }
     }
     if compound_selectors.len() == 1 && matches!(compound_selectors[0], Selector::Empty) {
-        dbg!(compound_selectors);
         return Err(nom::Err::Incomplete(nom::Needed::new(1)));
     }
     for precedence in (Combinator::min_precedence()..=Combinator::max_precedence()).rev() {
@@ -320,11 +319,7 @@ struct Tree {
     children: Vec<Tree>,
 }
 
-fn selector_tree_to_style_rules(
-    tree: &Tree,
-    priority: f64,
-    parent_selector: Option<Selector>,
-) -> StyleRule {
+fn selector_tree_to_style_rules(tree: &Tree, priority: f64) -> StyleRule {
     let selector = match &tree.statement {
         Statement::Selector(sel) => sel.clone(),
         _ => panic!("Expected selector statement"),
@@ -348,21 +343,17 @@ fn selector_tree_to_style_rules(
                     .next()
                     .expect("Expected selector after priority attribute");
                 if let Statement::Selector(_) = v.statement {
-                    main_style_rule.children.push(selector_tree_to_style_rules(
-                        v,
-                        *child_priority,
-                        Some(selector.clone()),
-                    ));
+                    main_style_rule
+                        .children
+                        .push(selector_tree_to_style_rules(v, *child_priority));
                 } else {
                     panic!("Expected selector after priority attribute");
                 }
             }
             Statement::Selector(_) => {
-                main_style_rule.children.push(selector_tree_to_style_rules(
-                    child,
-                    0.0,
-                    Some(selector.clone()),
-                ));
+                main_style_rule
+                    .children
+                    .push(selector_tree_to_style_rules(child, 0.0));
             }
             Statement::Root => {
                 unreachable!()
@@ -384,13 +375,13 @@ fn root_tree_to_style_rules(tree: &Tree) -> Vec<StyleRule> {
                     .next()
                     .expect("Expected selector after priority attribute");
                 if let Statement::Selector(_) = v.statement {
-                    style_rules.push(selector_tree_to_style_rules(v, *priority, None));
+                    style_rules.push(selector_tree_to_style_rules(v, *priority));
                 } else {
                     panic!("Expected selector after priority attribute");
                 }
             }
             Statement::Selector(_) => {
-                style_rules.push(selector_tree_to_style_rules(child, 0.0, None));
+                style_rules.push(selector_tree_to_style_rules(child, 0.0));
             }
             Statement::StyleDeclaration(_) => {
                 panic!("Style declarations must be under selectors");
@@ -482,7 +473,7 @@ fn codegen_style_rule<W: Write>(
         }
         let mut prop_decls = Vec::new();
         let mut var_decls = Vec::new();
-        for (num, declaration) in style_rule.declarations.iter().enumerate() {
+        for declaration in &style_rule.declarations {
             if declaration.property.starts_with("--") {
                 var_decls.push(declaration.clone());
             } else {
@@ -545,8 +536,8 @@ fn codegen<W: Write>(writer: &mut W, rules: Vec<StyleRule>) {
     write!(writer, "local {name} = Instance.new \"StyleSheet\"\n").unwrap();
     write!(writer, "local style_rules = {{}}\n").unwrap();
 
-    for (num, rule) in rules.iter().enumerate() {
-        codegen_style_rule(&mut ctx, rule, name.clone(), writer);
+    for rule in rules {
+        codegen_style_rule(&mut ctx, &rule, name.clone(), writer);
     }
     write!(writer, "{name}:SetStyleRules(style_rules)\n").unwrap();
     write!(writer, "\nreturn {name}").unwrap();

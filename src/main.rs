@@ -168,13 +168,14 @@ fn simple_selector(input: &str) -> IResult<&str, Selector> {
     ))
     .parse(input)
     .unwrap_or((input, Selector::Empty));
-    if let (input, Some(pseudo_class)) = opt(preceded(tag(":"), identifier)).parse(input)? {
+
+    if let Ok((input, Some(pseudo_class))) = opt(preceded(tag(":"), identifier)).parse(input) {
         Ok((
             input,
             Selector::PseudoClass(Box::new(selector), pseudo_class.to_string()),
         ))
-    } else if let (input, Some(pseudo_instance)) =
-        opt(preceded(tag("::"), identifier)).parse(input)?
+    } else if let Ok((input, Some(pseudo_instance))) =
+        opt(preceded(tag("::"), identifier)).parse(input)
     {
         Ok((
             input,
@@ -301,16 +302,20 @@ fn declaration(input: &str) -> IResult<&str, StyleDeclaration> {
 
 fn statement(input: &str) -> IResult<&str, Statement> {
     let res = priority_attribute(input);
-    if let Ok(_) = res {
-        return res;
+    if let Ok((input, _)) = res {
+        if input.trim().len() == 0 {
+            return res;
+        }
     }
 
-    let res = declaration.map(Statement::StyleDeclaration).parse(input);
-    if let Ok(_) = res {
-        return res;
+    let res = selector.map(Statement::Selector).parse(input);
+    if let Ok((input, _)) = res {
+        if input.trim().len() == 0 {
+            return res;
+        }
     }
 
-    selector.map(Statement::Selector).parse(input)
+    declaration.map(Statement::StyleDeclaration).parse(input)
 }
 
 #[derive(Debug)]

@@ -1,6 +1,19 @@
 @priority(10)
-TextButton, TextLabel, Frame
+TextButton, TextLabel
+	TextXAlignment: Enum.TextXAlignment.Left
+	AutomaticSize: Enum.AutomaticSize.X
+	RichText: true
+	TextColor3: Color3.fromRGB(255, 255, 255)
+	TextSize: 20
+	FontFace: Font.new "rbxasset://fonts/families/SourceSansPro.json"
 	BorderSizePixel: 0
+
+TextButton::UICorner, .solid::UICorner
+	CornerRadius: UDim.new(0, 4)
+
+Frame
+	BorderSizePixel: 0
+	BackgroundTransparency: 1
 
 .solid
 	BackgroundColor3: Color3.fromRGB(0, 0, 0)

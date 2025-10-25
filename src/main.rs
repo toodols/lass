@@ -552,54 +552,58 @@ fn main() {
         children: Vec::new(),
     };
 
-    for file in args.file {
-        let file = std::fs::read_to_string(file).expect("Failed to read file");
+    for file_pat in args.file {
+        for file in glob::glob(&file_pat).expect("Failed to read glob") {
+            let file = file.unwrap();
+            let file = std::fs::read_to_string(file).expect("Failed to read file");
 
-        let mut indent_style = EnforcedIndentStyle::Unknown;
-        for line in file.lines() {
-            if is_blank(line) {
-                continue;
-            }
-            match indent_level(line, indent_style) {
-                Ok((level, new_indent_style)) => {
-                    indent_style = new_indent_style;
-                    if comment(line.trim()).is_ok() {
-                        continue;
-                    };
-                    let (junk, stmt) = statement(line.trim()).expect("Failed to parse statement");
-                    assert!(junk.is_empty(), "Unparsed input remaining: {}", junk);
-
-                    while let Some((last_level, ..)) = stack.last() {
-                        if *last_level >= level {
-                            let (_, tree) = stack.pop().unwrap();
-                            if let Some(&mut (_, ref mut top)) = stack.last_mut() {
-                                top.children.push(tree);
-                            } else {
-                                root.children.push(tree);
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-
-                    stack.push((
-                        level,
-                        Tree {
-                            statement: stmt,
-                            children: Vec::new(),
-                        },
-                    ));
+            let mut indent_style = EnforcedIndentStyle::Unknown;
+            for line in file.lines() {
+                if is_blank(line) {
+                    continue;
                 }
-                Err(e) => panic!("{e}"),
-            }
-        }
+                match indent_level(line, indent_style) {
+                    Ok((level, new_indent_style)) => {
+                        indent_style = new_indent_style;
+                        if comment(line.trim()).is_ok() {
+                            continue;
+                        };
+                        let (junk, stmt) =
+                            statement(line.trim()).expect("Failed to parse statement");
+                        assert!(junk.is_empty(), "Unparsed input remaining: {}", junk);
 
-        // Empty remaining stack
-        while let Some((_, tree)) = stack.pop() {
-            if let Some(&mut (_, ref mut top)) = stack.last_mut() {
-                top.children.push(tree);
-            } else {
-                root.children.push(tree);
+                        while let Some((last_level, ..)) = stack.last() {
+                            if *last_level >= level {
+                                let (_, tree) = stack.pop().unwrap();
+                                if let Some(&mut (_, ref mut top)) = stack.last_mut() {
+                                    top.children.push(tree);
+                                } else {
+                                    root.children.push(tree);
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
+                        stack.push((
+                            level,
+                            Tree {
+                                statement: stmt,
+                                children: Vec::new(),
+                            },
+                        ));
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            }
+
+            // Empty remaining stack
+            while let Some((_, tree)) = stack.pop() {
+                if let Some(&mut (_, ref mut top)) = stack.last_mut() {
+                    top.children.push(tree);
+                } else {
+                    root.children.push(tree);
+                }
             }
         }
     }

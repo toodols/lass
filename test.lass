@@ -1,3 +1,4 @@
+@priority(10)
 TextButton, TextLabel, Frame
 	BorderSizePixel: 0
 
@@ -10,6 +11,9 @@ TextLabel, TextButton
 		FontFace: Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
 
 ImageLabel
+	// Priority only works on the bottom most selector
+	// Pretty sure this is intended behavior
+	@priority(1)
 	&:Hover
 		ImageTransparency: 0.5
 

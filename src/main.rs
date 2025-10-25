@@ -557,6 +557,11 @@ fn main() {
         children: Vec::new(),
     };
 
+    if args.file.is_empty() {
+        eprintln!("No files specified");
+        return;
+    }
+
     for file_pat in args.file {
         for file in glob::glob(&file_pat).expect("Failed to read glob") {
             let file = file.unwrap();

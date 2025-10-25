@@ -2,6 +2,9 @@
 name = "lass"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Compiles sass-like code to roblox stylesheet lua"
+repository = "https://github.com/toodols/lass"
 
 [dependencies]
 clap = { version = "4.5.50", features = ["derive"] }

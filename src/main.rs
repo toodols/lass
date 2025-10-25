@@ -501,7 +501,8 @@ fn codegen<W: Write>(writer: &mut W, rules: Vec<StyleRule>) {
     for (num, rule) in rules.iter().enumerate() {
         codegen_style_rule(rule, num, writer);
     }
-    write!(writer, "\nstyle_sheet:SetStyleRules(style_rules)").unwrap();
+    write!(writer, "\nstyle_sheet:SetStyleRules(style_rules)\n").unwrap();
+    write!(writer, "\nreturn style_sheet").unwrap();
 }
 
 fn main() {

@@ -1,0 +1,16 @@
+TextButton, TextLabel, Frame
+	BorderSizePixel: 0
+
+.solid
+	BackgroundColor3: Color3.fromRGB(0, 0, 0)
+	BackgroundTransparency: 0.2
+
+TextLabel, TextButton
+	.title
+		FontFace: Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+
+// funny
+.a, .b
+	.c, .d
+		.e, .f
+			TextColor3: Color3.fromRGB(255,255,255)

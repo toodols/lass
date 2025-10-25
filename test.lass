@@ -5,9 +5,13 @@ TextButton, TextLabel, Frame
 .solid
 	BackgroundColor3: Color3.fromRGB(0, 0, 0)
 	BackgroundTransparency: 0.2
+	
+:root
+	--Red: Color3.fromRGB(1, 0, 0)
 
 TextLabel, TextButton
-	.title
+	--Blue: Color3.fromRGB(0, 0, 1)
+	& > .title
 		FontFace: Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
 
 ImageLabel
@@ -16,9 +20,3 @@ ImageLabel
 	@priority(1)
 	&:Hover
 		ImageTransparency: 0.5
-
-// funny
-.a, .b
-	.c, .d
-		.e, .f
-			TextColor3: Color3.fromRGB(255,255,255)

@@ -21,15 +21,14 @@ struct StyleRule {
     priority: f64,
     selector: Selector,
     declarations: Vec<StyleDeclaration>,
+    children: Vec<StyleRule>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Selector {
-    Class(String), // .class
-    Id(String),    // #id
-    Tag(String),   // tag
-    // Unfortunately Parent has to be right associative because otherwise doing
-    // The product is a hassle
+    Class(String),         // .class
+    Id(String),            // #id
+    Tag(String),           // tag
     Parent(Box<Selector>), // &
     Empty,
     PseudoClass(Box<Selector>, String),
@@ -174,6 +173,13 @@ fn simple_selector(input: &str) -> IResult<&str, Selector> {
             input,
             Selector::PseudoClass(Box::new(selector), pseudo_class.to_string()),
         ))
+    } else if let (input, Some(pseudo_instance)) =
+        opt(preceded(tag("::"), identifier)).parse(input)?
+    {
+        Ok((
+            input,
+            Selector::PseudoInstance(Box::new(selector), pseudo_instance.to_string()),
+        ))
     } else {
         if selector == Selector::Empty {
             Err(nom::Err::Incomplete(nom::Needed::new(1)))
@@ -189,10 +195,9 @@ fn ws(input: &str) -> IResult<&str, &str> {
 
 fn compound_selector(input: &str) -> IResult<&str, Selector> {
     let (input, parent) = opt(tag("&")).parse(input)?;
-
     let mut selectors = Vec::new();
 
-    let (input, selector) = simple_selector(input)?;
+    let (input, selector) = simple_selector(input).unwrap_or((input, Selector::Empty));
     selectors.push(selector);
     let mut input = input;
     loop {
@@ -203,11 +208,11 @@ fn compound_selector(input: &str) -> IResult<&str, Selector> {
             break;
         };
     }
-    if selectors.len() == 1 {
+    if selectors.len() == 1 && selectors[0] == Selector::Empty {
         if parent.is_some() {
             Ok((input, Selector::Parent(Box::new(selectors.pop().unwrap()))))
         } else {
-            Ok((input, selectors.pop().unwrap()))
+            Err(nom::Err::Incomplete(nom::Needed::new(1)))
         }
     } else {
         if parent.is_some() {
@@ -238,8 +243,8 @@ fn selector_combinator(input: &str) -> IResult<&str, Combinator> {
 }
 
 fn selector(input: &str) -> IResult<&str, Selector> {
-    let (mut input, left) = compound_selector(input)?;
-    let mut simple_selectors: Vec<Selector> = vec![left];
+    let (mut input, left) = compound_selector(input).unwrap_or((input, Selector::Empty));
+    let mut compound_selectors: Vec<Selector> = vec![left];
     let mut operators: Vec<Combinator> = vec![];
     loop {
         let (next_input, opt_combinator) =
@@ -248,75 +253,34 @@ fn selector(input: &str) -> IResult<&str, Selector> {
             let (next_input, right) = compound_selector(next_input)?;
             input = next_input;
             operators.push(combinator);
-            simple_selectors.push(right);
+            compound_selectors.push(right);
         } else {
             break;
         }
+    }
+    if compound_selectors.len() == 1 && matches!(compound_selectors[0], Selector::Empty) {
+        dbg!(compound_selectors);
+        return Err(nom::Err::Incomplete(nom::Needed::new(1)));
     }
     for precedence in (Combinator::min_precedence()..=Combinator::max_precedence()).rev() {
         let mut i = 0;
         while i < operators.len() {
             if operators[i].precedence() == precedence {
-                let left = simple_selectors.remove(i);
-                let right = simple_selectors.remove(i);
+                let left = compound_selectors.remove(i);
+                let right = compound_selectors.remove(i);
                 let operator = operators.remove(i);
                 let combined = Selector::Operation {
                     left: Box::new(left),
                     operator,
                     right: Box::new(right),
                 };
-                simple_selectors.insert(i, combined);
+                compound_selectors.insert(i, combined);
             } else {
                 i += 1;
             }
         }
     }
-    return Ok((input, simple_selectors.remove(0)));
-}
-
-// We can do this because Or has the highest precedence and since there are no parentheses allowed in css, Or will only ever appear at the outside of the expression tree
-fn flatten_selector_disjunctions(selector: Selector) -> Vec<Selector> {
-    match selector {
-        Selector::Operation {
-            left,
-            operator: Combinator::Or,
-            right,
-        } => {
-            let mut left = flatten_selector_disjunctions(*left);
-            let mut right = flatten_selector_disjunctions(*right);
-            left.append(&mut right);
-            left
-        }
-        other => vec![other],
-    }
-}
-
-fn selector_disjunctions_product(left: Vec<Selector>, right: Vec<Selector>) -> Vec<Selector> {
-    let mut result = Vec::new();
-    for l in left.iter() {
-        for r in right.iter() {
-            dbg!(&l, &r);
-            match r {
-                Selector::Parent(r) => result.push(Selector::Compound(vec![l.clone(), *r.clone()])),
-                _ => result.push(Selector::Operation {
-                    left: Box::new(l.clone()),
-                    operator: Combinator::Descendant,
-                    right: Box::new(r.clone()),
-                }),
-            }
-        }
-    }
-    result
-}
-
-fn fold_selector_disjunctions(selectors: Vec<Selector>) -> Selector {
-    let mut iter = selectors.into_iter();
-    let first = iter.next().unwrap();
-    iter.fold(first, |acc, sel| Selector::Operation {
-        left: Box::new(acc),
-        operator: Combinator::Or,
-        right: Box::new(sel),
-    })
+    return Ok((input, compound_selectors.remove(0)));
 }
 
 fn priority_attribute(input: &str) -> IResult<&str, Statement> {
@@ -360,26 +324,19 @@ fn selector_tree_to_style_rules(
     tree: &Tree,
     priority: f64,
     parent_selector: Option<Selector>,
-) -> Vec<StyleRule> {
-    let mut selector = match &tree.statement {
+) -> StyleRule {
+    let selector = match &tree.statement {
         Statement::Selector(sel) => sel.clone(),
         _ => panic!("Expected selector statement"),
     };
 
-    if let Some(parent_selector) = parent_selector {
-        selector = fold_selector_disjunctions(selector_disjunctions_product(
-            flatten_selector_disjunctions(parent_selector),
-            flatten_selector_disjunctions(selector),
-        ))
-    }
-
     let mut children_iter = tree.children.iter();
-    let mut style_rules = Vec::new();
 
     let mut main_style_rule = StyleRule {
         priority,
         selector: selector.clone(),
         declarations: Vec::new(),
+        children: Vec::new(),
     };
     while let Some(child) = children_iter.next() {
         match &child.statement {
@@ -391,11 +348,7 @@ fn selector_tree_to_style_rules(
                     .next()
                     .expect("Expected selector after priority attribute");
                 if let Statement::Selector(_) = v.statement {
-                    if !main_style_rule.declarations.is_empty() {
-                        style_rules.push(main_style_rule.clone());
-                        main_style_rule.declarations = Vec::new();
-                    }
-                    style_rules.append(&mut selector_tree_to_style_rules(
+                    main_style_rule.children.push(selector_tree_to_style_rules(
                         v,
                         *child_priority,
                         Some(selector.clone()),
@@ -405,11 +358,7 @@ fn selector_tree_to_style_rules(
                 }
             }
             Statement::Selector(_) => {
-                if !main_style_rule.declarations.is_empty() {
-                    style_rules.push(main_style_rule.clone());
-                    main_style_rule.declarations = Vec::new();
-                }
-                style_rules.append(&mut selector_tree_to_style_rules(
+                main_style_rule.children.push(selector_tree_to_style_rules(
                     child,
                     0.0,
                     Some(selector.clone()),
@@ -420,10 +369,8 @@ fn selector_tree_to_style_rules(
             }
         }
     }
-    if !main_style_rule.declarations.is_empty() {
-        style_rules.push(main_style_rule.clone());
-    }
-    style_rules
+
+    main_style_rule
 }
 
 fn root_tree_to_style_rules(tree: &Tree) -> Vec<StyleRule> {
@@ -437,13 +384,13 @@ fn root_tree_to_style_rules(tree: &Tree) -> Vec<StyleRule> {
                     .next()
                     .expect("Expected selector after priority attribute");
                 if let Statement::Selector(_) = v.statement {
-                    style_rules.append(&mut selector_tree_to_style_rules(v, *priority, None));
+                    style_rules.push(selector_tree_to_style_rules(v, *priority, None));
                 } else {
                     panic!("Expected selector after priority attribute");
                 }
             }
             Statement::Selector(_) => {
-                style_rules.append(&mut selector_tree_to_style_rules(child, 0.0, None));
+                style_rules.push(selector_tree_to_style_rules(child, 0.0, None));
             }
             Statement::StyleDeclaration(_) => {
                 panic!("Style declarations must be under selectors");
@@ -461,7 +408,9 @@ fn codegen_selector<W: Write>(selector: &Selector, writer: &mut W) {
         Selector::Class(name) => write!(writer, ".{name}").unwrap(),
         Selector::Id(name) => write!(writer, "#{name}").unwrap(),
         Selector::Tag(name) => write!(writer, "{name}").unwrap(),
-        Selector::Parent(_) => unreachable!("noo"),
+        Selector::Parent(inner) => {
+            codegen_selector(inner, &mut *writer);
+        }
         Selector::Empty => {}
         Selector::Compound(selectors) => {
             for selector in selectors {
@@ -492,49 +441,115 @@ fn codegen_selector<W: Write>(selector: &Selector, writer: &mut W) {
     }
 }
 
-fn codegen_style_rule<W: Write>(style_rule: &StyleRule, num: usize, writer: &mut W) {
-    let name = format!("style_rule_{}", num);
-    write!(writer, "\nlocal {name} = Instance.new \"StyleRule\"\n").unwrap();
-    write!(writer, "{name}.Parent = style_sheet\n").unwrap();
-    write!(writer, "table.insert(style_rules, style_rule_{num})\n").unwrap();
-    write!(writer, "{name}.Selector = \"").unwrap();
-    codegen_selector(&style_rule.selector, &mut *writer);
-    write!(writer, "\"\n").unwrap();
-    if style_rule.priority != 0.0 {
-        write!(
-            writer,
-            "{name}.Priority = {priority}\n",
-            priority = style_rule.priority
-        )
-        .unwrap();
+fn codegen_style_rule<W: Write>(
+    ctx: &mut Context,
+    style_rule: &StyleRule,
+    parent: String,
+    writer: &mut W,
+) {
+    let mut name = None;
+    if matches!(style_rule.selector, Selector::PseudoClass(ref left, ref right) if **left == Selector::Empty && right == "root")
+    {
+        write!(writer, "\n").unwrap();
+        for declaration in &style_rule.declarations {
+            if !declaration.property.starts_with("--") {
+                panic!("Expected variable in :root");
+            }
+            write!(
+                writer,
+                "style_sheet:SetAttribute(\"{property}\", {value})\n",
+                property = &declaration.property[2..],
+                value = declaration.value
+            )
+            .unwrap();
+        }
+    } else if !style_rule.declarations.is_empty() || !style_rule.children.is_empty() {
+        name.get_or_insert_with(|| ctx.next_name());
+        let name = name.as_ref().unwrap();
+        write!(writer, "\nlocal {name} = Instance.new \"StyleRule\"\n").unwrap();
+        write!(writer, "{name}.Parent = {parent}\n").unwrap();
+        write!(writer, "table.insert(style_rules, {name})\n").unwrap();
+        write!(writer, "{name}.Selector = \"").unwrap();
+        codegen_selector(&style_rule.selector, &mut *writer);
+        write!(writer, "\"\n").unwrap();
+        if style_rule.priority != 0.0 {
+            write!(
+                writer,
+                "{name}.Priority = {priority}\n",
+                priority = style_rule.priority
+            )
+            .unwrap();
+        }
+        let mut prop_decls = Vec::new();
+        let mut var_decls = Vec::new();
+        for (num, declaration) in style_rule.declarations.iter().enumerate() {
+            if declaration.property.starts_with("--") {
+                var_decls.push(declaration.clone());
+            } else {
+                prop_decls.push(declaration.clone());
+            }
+        }
+        for var_decl in var_decls {
+            write!(
+                writer,
+                "{name}:SetAttribute(\"{property}\", {value})\n",
+                property = &var_decl.property[2..],
+                value = var_decl.value
+            )
+            .unwrap();
+        }
+        if !prop_decls.is_empty() {
+            write!(writer, "{name}:SetProperties{{\n").unwrap();
+            for (num, declaration) in prop_decls.iter().enumerate() {
+                let trailing_comma = if num == style_rule.declarations.len() - 1 {
+                    ""
+                } else {
+                    ", "
+                };
+                write!(
+                    writer,
+                    "\t[\"{property}\"] = {value}{trailing_comma}\n",
+                    property = declaration.property,
+                    value = declaration.value
+                )
+                .unwrap();
+            }
+
+            write!(writer, "}}\n").unwrap();
+        }
     }
-    write!(writer, "{name}:SetProperties{{\n").unwrap();
-    for (num, declaration) in style_rule.declarations.iter().enumerate() {
-        let trailing_comma = if num == style_rule.declarations.len() - 1 {
-            ""
-        } else {
-            ", "
-        };
-        write!(
-            writer,
-            "\t[\"{property}\"] = {value}{trailing_comma}\n",
-            property = declaration.property,
-            value = declaration.value
-        )
-        .unwrap();
+
+    if style_rule.children.is_empty() {
+        return;
     }
-    write!(writer, "}}\n").unwrap();
+    name.get_or_insert_with(|| ctx.next_name());
+    let name = name.unwrap();
+    for child in &style_rule.children {
+        codegen_style_rule(ctx, child, name.clone(), writer);
+    }
 }
 
+struct Context {
+    name_count: u32,
+}
+impl Context {
+    fn next_name(&mut self) -> String {
+        let name = format!("style_rule_{}", self.name_count);
+        self.name_count += 1;
+        name
+    }
+}
 fn codegen<W: Write>(writer: &mut W, rules: Vec<StyleRule>) {
-    write!(writer, "local style_sheet = Instance.new \"StyleSheet\"\n").unwrap();
+    let mut ctx = Context { name_count: 0 };
+    let name = "style_sheet".to_owned();
+    write!(writer, "local {name} = Instance.new \"StyleSheet\"\n").unwrap();
     write!(writer, "local style_rules = {{}}\n").unwrap();
 
     for (num, rule) in rules.iter().enumerate() {
-        codegen_style_rule(rule, num, writer);
+        codegen_style_rule(&mut ctx, rule, name.clone(), writer);
     }
-    write!(writer, "\nstyle_sheet:SetStyleRules(style_rules)\n").unwrap();
-    write!(writer, "\nreturn style_sheet").unwrap();
+    write!(writer, "{name}:SetStyleRules(style_rules)\n").unwrap();
+    write!(writer, "\nreturn {name}").unwrap();
 }
 
 fn main() {

@@ -22,28 +22,36 @@ style_rule_1:SetProperties{
 local style_rule_2 = Instance.new "StyleRule"
 style_rule_2.Parent = style_sheet
 table.insert(style_rules, style_rule_2)
-style_rule_2.Selector = "TextLabel >> .title, TextButton >> .title"
-style_rule_2:SetProperties{
-	["FontFace"] = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-}
+style_rule_2.Selector = ":root"
+style_rule_2:SetAttribute("Red", Color3.fromRGB(1, 0, 0))
 
 local style_rule_3 = Instance.new "StyleRule"
 style_rule_3.Parent = style_sheet
 table.insert(style_rules, style_rule_3)
-style_rule_3.Selector = "ImageLabel:Hover"
-style_rule_3.Priority = 1
-style_rule_3:SetProperties{
-	["ImageTransparency"] = 0.5
-}
+style_rule_3.Selector = "TextLabel, TextButton"
+style_rule_3:SetAttribute("Blue", Color3.fromRGB(0, 0, 1))
 
 local style_rule_4 = Instance.new "StyleRule"
-style_rule_4.Parent = style_sheet
+style_rule_4.Parent = style_rule_3
 table.insert(style_rules, style_rule_4)
-style_rule_4.Selector = ".a >> .c >> .e, .a >> .c >> .f, .a >> .d >> .e, .a >> .d >> .f, .b >> .c >> .e, .b >> .c >> .f, .b >> .d >> .e, .b >> .d >> .f"
+style_rule_4.Selector = " > .title"
 style_rule_4:SetProperties{
-	["TextColor3"] = Color3.fromRGB(255,255,255)
+	["FontFace"] = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
 }
 
+local style_rule_5 = Instance.new "StyleRule"
+style_rule_5.Parent = style_sheet
+table.insert(style_rules, style_rule_5)
+style_rule_5.Selector = "ImageLabel"
+
+local style_rule_6 = Instance.new "StyleRule"
+style_rule_6.Parent = style_rule_5
+table.insert(style_rules, style_rule_6)
+style_rule_6.Selector = ":Hover"
+style_rule_6.Priority = 1
+style_rule_6:SetProperties{
+	["ImageTransparency"] = 0.5
+}
 style_sheet:SetStyleRules(style_rules)
 
 return style_sheet

@@ -500,12 +500,14 @@ fn codegen_style_rule<W: Write>(style_rule: &StyleRule, num: usize, writer: &mut
     write!(writer, "{name}.Selector = \"").unwrap();
     codegen_selector(&style_rule.selector, &mut *writer);
     write!(writer, "\"\n").unwrap();
-    write!(
-        writer,
-        "{name}.Priority = {priority}\n",
-        priority = style_rule.priority
-    )
-    .unwrap();
+    if style_rule.priority != 0.0 {
+        write!(
+            writer,
+            "{name}.Priority = {priority}\n",
+            priority = style_rule.priority
+        )
+        .unwrap();
+    }
     write!(writer, "{name}:SetProperties{{\n").unwrap();
     for (num, declaration) in style_rule.declarations.iter().enumerate() {
         let trailing_comma = if num == style_rule.declarations.len() - 1 {

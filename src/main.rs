@@ -446,10 +446,8 @@ fn codegen_style_rule<W: Write>(
     writer: &mut W,
 ) {
     let mut name = None;
-    dbg!(&style_rule.selector);
     if matches!(style_rule.selector, Selector::PseudoClass(ref left, ref right) if **left == Selector::Empty && right == "root")
     {
-        println!("root rule");
         write!(writer, "\n").unwrap();
         for declaration in &style_rule.declarations {
             if !declaration.property.starts_with("--") {

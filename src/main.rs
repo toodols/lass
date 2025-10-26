@@ -209,11 +209,13 @@ fn compound_selector(input: &str) -> IResult<&str, Selector> {
             break;
         };
     }
-    if selectors.len() == 1 && selectors[0] == Selector::Empty {
+    if selectors.len() == 1 {
         if parent.is_some() {
             Ok((input, Selector::Parent(Box::new(selectors.pop().unwrap()))))
-        } else {
+        } else if selectors[0] == Selector::Empty {
             Err(nom::Err::Incomplete(nom::Needed::new(1)))
+        } else {
+            Ok((input, selectors.pop().unwrap()))
         }
     } else {
         if parent.is_some() {
@@ -444,8 +446,10 @@ fn codegen_style_rule<W: Write>(
     writer: &mut W,
 ) {
     let mut name = None;
+    dbg!(&style_rule.selector);
     if matches!(style_rule.selector, Selector::PseudoClass(ref left, ref right) if **left == Selector::Empty && right == "root")
     {
+        println!("root rule");
         write!(writer, "\n").unwrap();
         for declaration in &style_rule.declarations {
             if !declaration.property.starts_with("--") {
@@ -464,7 +468,6 @@ fn codegen_style_rule<W: Write>(
         let name = name.as_ref().unwrap();
         write!(writer, "\nlocal {name} = Instance.new \"StyleRule\"\n").unwrap();
         write!(writer, "{name}.Parent = {parent}\n").unwrap();
-        write!(writer, "table.insert(style_rules, {name})\n").unwrap();
         write!(writer, "{name}.Selector = \"").unwrap();
         codegen_selector(&style_rule.selector, &mut *writer);
         write!(writer, "\"\n").unwrap();
@@ -539,12 +542,9 @@ fn codegen<W: Write>(writer: &mut W, rules: Vec<StyleRule>) {
     let mut ctx = Context { name_count: 0 };
     let name = "style_sheet".to_owned();
     write!(writer, "local {name} = Instance.new \"StyleSheet\"\n").unwrap();
-    write!(writer, "local style_rules = {{}}\n").unwrap();
-
     for rule in rules {
         codegen_style_rule(&mut ctx, &rule, name.clone(), writer);
     }
-    write!(writer, "{name}:SetStyleRules(style_rules)\n").unwrap();
     write!(writer, "\nreturn {name}").unwrap();
 }
 

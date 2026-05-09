@@ -1,6 +1,6 @@
-use std::io::Write;
+use std::{io::Write, path::PathBuf};
 
-use clap::{Parser, command};
+use clap::Parser;
 use nom::{
     IResult, Parser as NomParser,
     branch::alt,
@@ -75,7 +75,6 @@ enum Statement {
 #[derive(Parser, Debug)]
 #[command()]
 struct Args {
-    /// Name of the person to greet
     #[arg(short, long)]
     out: Option<String>,
 
@@ -235,7 +234,7 @@ fn comment(input: &str) -> IResult<&str, &str> {
 }
 
 fn selector_combinator(input: &str) -> IResult<&str, Combinator> {
-    alt((tag(">"), tag(">>"), tag(",")))
+    alt((tag(">>"), tag(">"), tag(",")))
         .map(|s: &str| match s {
             ">" => Combinator::Child,
             ">>" => Combinator::Descendant,
@@ -250,13 +249,27 @@ fn selector(input: &str) -> IResult<&str, Selector> {
     let mut compound_selectors: Vec<Selector> = vec![left];
     let mut operators: Vec<Combinator> = vec![];
     loop {
-        let (next_input, opt_combinator) =
-            opt(delimited(ws, selector_combinator, ws)).parse(input)?;
-        if let Some(combinator) = opt_combinator {
-            let (next_input, right) = compound_selector(next_input)?;
-            input = next_input;
-            operators.push(combinator);
-            compound_selectors.push(right);
+        let (after_ws, ws_str) = ws.parse(input)?;
+
+        // Try to parse explicit combinator
+        if let Ok((after_combinator, combinator)) = selector_combinator.parse(after_ws) {
+            let (after_combinator_ws, _) = ws.parse(after_combinator)?;
+            if let Ok((next_input, right)) = compound_selector(after_combinator_ws) {
+                input = next_input;
+                operators.push(combinator);
+                compound_selectors.push(right);
+            } else {
+                break;
+            }
+        } else if !ws_str.is_empty() {
+            // We have whitespace but no explicit combinator, check if there's another selector
+            if let Ok((next_input, right)) = compound_selector(after_ws) {
+                input = next_input;
+                operators.push(Combinator::Descendant);
+                compound_selectors.push(right);
+            } else {
+                break;
+            }
         } else {
             break;
         }
@@ -286,8 +299,12 @@ fn selector(input: &str) -> IResult<&str, Selector> {
 }
 
 fn priority_attribute(input: &str) -> IResult<&str, Statement> {
-    let (input, value) =
-        delimited((tag("@priority"), ws, tag("(")), number::double(), tag(")")).parse(input)?;
+    let (input, value) = delimited(
+        (tag("@priority"), ws, tag("("), ws),
+        number::double(),
+        (ws, tag(")")),
+    )
+    .parse(input)?;
     Ok((input, Statement::PriorityAttribute(value)))
 }
 
@@ -311,9 +328,13 @@ fn statement(input: &str) -> IResult<&str, Statement> {
     }
 
     let res = selector.map(Statement::Selector).parse(input);
-    if let Ok((input, _)) = res {
+    if let Ok((mut input, stmt)) = res {
+        input = input.trim_start();
+        if let Ok((after_colon, _)) = tag::<&str, &str, nom::error::Error<&str>>(":").parse(input) {
+            input = after_colon;
+        }
         if input.trim().len() == 0 {
-            return res;
+            return Ok((input, stmt));
         }
     }
 
@@ -432,7 +453,7 @@ fn codegen_selector<W: Write>(selector: &Selector, writer: &mut W) {
             match operator {
                 Combinator::Or => write!(writer, ", ").unwrap(),
                 Combinator::Child => write!(writer, " > ").unwrap(),
-                Combinator::Descendant => write!(writer, " >> ").unwrap(),
+                Combinator::Descendant => write!(writer, " >> ").unwrap(), // Use >> not space
             }
             codegen_selector(right, &mut *writer);
         }
@@ -546,6 +567,68 @@ fn codegen<W: Write>(writer: &mut W, rules: Vec<StyleRule>) {
     write!(writer, "\nreturn {name}").unwrap();
 }
 
+fn parse_to_tree(
+    file: &str,
+    file_path: &PathBuf,
+    stack: &mut Vec<(usize, Tree)>,
+    root: &mut Tree,
+) {
+    let mut indent_style = EnforcedIndentStyle::Unknown;
+    for (line_num, line) in file.lines().enumerate() {
+        if is_blank(line) {
+            continue;
+        }
+        match indent_level(line, indent_style) {
+            Ok((level, new_indent_style)) => {
+                indent_style = new_indent_style;
+                if comment(line.trim()).is_ok() {
+                    continue;
+                };
+                let (junk, stmt) = statement(line.trim()).expect(
+                    format!(
+                        "Failed to parse statement {}:{}",
+                        file_path.to_string_lossy(),
+                        line_num + 1
+                    )
+                    .as_str(),
+                );
+                assert!(junk.is_empty(), "Unparsed input remaining: {}", junk);
+
+                while let Some((last_level, ..)) = stack.last() {
+                    if *last_level >= level {
+                        let (_, tree) = stack.pop().unwrap();
+                        if let Some(&mut (_, ref mut top)) = stack.last_mut() {
+                            top.children.push(tree);
+                        } else {
+                            root.children.push(tree);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                stack.push((
+                    level,
+                    Tree {
+                        statement: stmt,
+                        children: Vec::new(),
+                    },
+                ));
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    // Empty remaining stack
+    while let Some((_, tree)) = stack.pop() {
+        if let Some(&mut (_, ref mut top)) = stack.last_mut() {
+            top.children.push(tree);
+        } else {
+            root.children.push(tree);
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -562,61 +645,39 @@ fn main() {
 
     for file_pat in args.file {
         for file in glob::glob(&file_pat).expect("Failed to read glob") {
-            let file = file.unwrap();
-            let file = std::fs::read_to_string(file).expect("Failed to read file");
-
-            let mut indent_style = EnforcedIndentStyle::Unknown;
-            for line in file.lines() {
-                if is_blank(line) {
-                    continue;
-                }
-                match indent_level(line, indent_style) {
-                    Ok((level, new_indent_style)) => {
-                        indent_style = new_indent_style;
-                        if comment(line.trim()).is_ok() {
-                            continue;
-                        };
-                        let (junk, stmt) =
-                            statement(line.trim()).expect("Failed to parse statement");
-                        assert!(junk.is_empty(), "Unparsed input remaining: {}", junk);
-
-                        while let Some((last_level, ..)) = stack.last() {
-                            if *last_level >= level {
-                                let (_, tree) = stack.pop().unwrap();
-                                if let Some(&mut (_, ref mut top)) = stack.last_mut() {
-                                    top.children.push(tree);
-                                } else {
-                                    root.children.push(tree);
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-
-                        stack.push((
-                            level,
-                            Tree {
-                                statement: stmt,
-                                children: Vec::new(),
-                            },
-                        ));
-                    }
-                    Err(e) => panic!("{e}"),
-                }
-            }
-
-            // Empty remaining stack
-            while let Some((_, tree)) = stack.pop() {
-                if let Some(&mut (_, ref mut top)) = stack.last_mut() {
-                    top.children.push(tree);
-                } else {
-                    root.children.push(tree);
-                }
-            }
+            let file_path = file.unwrap();
+            let file = std::fs::read_to_string(file_path.clone()).expect("Failed to read file");
+            parse_to_tree(&file, &file_path, &mut stack, &mut root);
         }
     }
     let style_rules = root_tree_to_style_rules(&root);
     let mut file = std::fs::File::create(args.out.unwrap_or("out.lua".to_owned()))
         .expect("Failed to create output file");
     codegen(&mut file, style_rules);
+}
+
+#[test]
+fn test() {
+    let inputs = [
+        r#"@priority(1)
+.btn >> .text::UICorner
+"#,
+        r#".btn.active"#,
+        r#".btn > .text"#,
+        r#".btn::UICorner
+    Text: "Hello" 
+"#,
+        include_str!("../example.lass"),
+    ];
+    for input in inputs {
+        parse_to_tree(
+            input,
+            &PathBuf::from("test_input"),
+            &mut Vec::new(),
+            &mut Tree {
+                statement: Statement::Root,
+                children: Vec::new(),
+            },
+        );
+    }
 }

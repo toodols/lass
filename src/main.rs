@@ -418,9 +418,11 @@ fn selector_tree_to_style_rules(
                     .next()
                     .expect("Expected selector after priority attribute");
                 if let Statement::Selector(_) = v.statement {
-                    main_style_rule
-                        .children
-                        .push(selector_tree_to_style_rules(v, *child_priority, mixins));
+                    main_style_rule.children.push(selector_tree_to_style_rules(
+                        v,
+                        *child_priority,
+                        mixins,
+                    ));
                 } else {
                     panic!("Expected selector after priority attribute");
                 }
@@ -600,7 +602,7 @@ fn codegen_style_rule<W: Write>(
             write!(writer, "}}\n").unwrap();
         }
         if !transitions.is_empty() {
-            write!(writer, "{name}:SetPropertyTransition({{\n").unwrap();
+            write!(writer, "{name}:SetPropertyTransitions({{\n").unwrap();
             for transition in &transitions {
                 write!(
                     writer,

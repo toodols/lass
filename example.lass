@@ -1,3 +1,6 @@
+@mixin transition
+	Transition: BackgroundColor3, BackgroundTransparency
+
 @priority(10)
 TextButton, TextLabel
 	TextXAlignment: Enum.TextXAlignment.Left
@@ -7,6 +10,7 @@ TextButton, TextLabel
 	TextSize: 20
 	FontFace: Font.new "rbxasset://fonts/families/SourceSansPro.json"
 	BorderSizePixel: 0
+	@include transition
 
 TextButton::UICorner, .solid::UICorner
 	CornerRadius: UDim.new(0, 4)

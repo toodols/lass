@@ -1,4 +1,4 @@
-use std::{io::Write, path::PathBuf};
+use std::{collections::HashMap, io::Write, path::PathBuf};
 
 use clap::Parser;
 use nom::{
@@ -70,6 +70,8 @@ enum Statement {
     Selector(Selector),
     StyleDeclaration(StyleDeclaration),
     PriorityAttribute(f64),
+    MixinDefinition(String),
+    Include(String),
 }
 
 #[derive(Parser, Debug)]
@@ -308,6 +310,16 @@ fn priority_attribute(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::PriorityAttribute(value)))
 }
 
+fn mixin_definition(input: &str) -> IResult<&str, Statement> {
+    let (input, name) = preceded((tag("@mixin"), ws), identifier).parse(input)?;
+    Ok((input, Statement::MixinDefinition(name.to_string())))
+}
+
+fn include_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, name) = preceded((tag("@include"), ws), identifier).parse(input)?;
+    Ok((input, Statement::Include(name.to_string())))
+}
+
 fn declaration(input: &str) -> IResult<&str, StyleDeclaration> {
     let (input, prop) = terminated(identifier, (tag(":"), ws)).parse(input)?;
     Ok((
@@ -321,6 +333,20 @@ fn declaration(input: &str) -> IResult<&str, StyleDeclaration> {
 
 fn statement(input: &str) -> IResult<&str, Statement> {
     let res = priority_attribute(input);
+    if let Ok((input, _)) = res {
+        if input.trim().len() == 0 {
+            return res;
+        }
+    }
+
+    let res = mixin_definition(input);
+    if let Ok((input, _)) = res {
+        if input.trim().len() == 0 {
+            return res;
+        }
+    }
+
+    let res = include_statement(input);
     if let Ok((input, _)) = res {
         if input.trim().len() == 0 {
             return res;
@@ -347,7 +373,28 @@ struct Tree {
     children: Vec<Tree>,
 }
 
-fn selector_tree_to_style_rules(tree: &Tree, priority: f64) -> StyleRule {
+fn collect_mixins(tree: &Tree, mixins: &mut HashMap<String, Vec<StyleDeclaration>>) {
+    for child in &tree.children {
+        if let Statement::MixinDefinition(name) = &child.statement {
+            let decls = child
+                .children
+                .iter()
+                .filter_map(|c| match &c.statement {
+                    Statement::StyleDeclaration(d) => Some(d.clone()),
+                    _ => None,
+                })
+                .collect();
+            mixins.insert(name.clone(), decls);
+        }
+        collect_mixins(child, mixins);
+    }
+}
+
+fn selector_tree_to_style_rules(
+    tree: &Tree,
+    priority: f64,
+    mixins: &HashMap<String, Vec<StyleDeclaration>>,
+) -> StyleRule {
     let selector = match &tree.statement {
         Statement::Selector(sel) => sel.clone(),
         _ => panic!("Expected selector statement"),
@@ -373,7 +420,7 @@ fn selector_tree_to_style_rules(tree: &Tree, priority: f64) -> StyleRule {
                 if let Statement::Selector(_) = v.statement {
                     main_style_rule
                         .children
-                        .push(selector_tree_to_style_rules(v, *child_priority));
+                        .push(selector_tree_to_style_rules(v, *child_priority, mixins));
                 } else {
                     panic!("Expected selector after priority attribute");
                 }
@@ -381,8 +428,15 @@ fn selector_tree_to_style_rules(tree: &Tree, priority: f64) -> StyleRule {
             Statement::Selector(_) => {
                 main_style_rule
                     .children
-                    .push(selector_tree_to_style_rules(child, 0.0));
+                    .push(selector_tree_to_style_rules(child, 0.0, mixins));
             }
+            Statement::Include(name) => {
+                let decls = mixins
+                    .get(name)
+                    .unwrap_or_else(|| panic!("Unknown mixin: {name}"));
+                main_style_rule.declarations.extend(decls.clone());
+            }
+            Statement::MixinDefinition(_) => {}
             Statement::Root => {
                 unreachable!()
             }
@@ -392,7 +446,10 @@ fn selector_tree_to_style_rules(tree: &Tree, priority: f64) -> StyleRule {
     main_style_rule
 }
 
-fn root_tree_to_style_rules(tree: &Tree) -> Vec<StyleRule> {
+fn root_tree_to_style_rules(
+    tree: &Tree,
+    mixins: &HashMap<String, Vec<StyleDeclaration>>,
+) -> Vec<StyleRule> {
     let mut style_rules = Vec::new();
 
     let mut children_iter = tree.children.iter();
@@ -403,19 +460,23 @@ fn root_tree_to_style_rules(tree: &Tree) -> Vec<StyleRule> {
                     .next()
                     .expect("Expected selector after priority attribute");
                 if let Statement::Selector(_) = v.statement {
-                    style_rules.push(selector_tree_to_style_rules(v, *priority));
+                    style_rules.push(selector_tree_to_style_rules(v, *priority, mixins));
                 } else {
                     panic!("Expected selector after priority attribute");
                 }
             }
             Statement::Selector(_) => {
-                style_rules.push(selector_tree_to_style_rules(child, 0.0));
+                style_rules.push(selector_tree_to_style_rules(child, 0.0, mixins));
             }
             Statement::StyleDeclaration(_) => {
                 panic!("Style declarations must be under selectors");
             }
+            Statement::Include(_) => {
+                panic!("@include must be used within a selector");
+            }
+            Statement::MixinDefinition(_) => {}
             Statement::Root => {
-                style_rules.append(&mut root_tree_to_style_rules(child));
+                style_rules.append(&mut root_tree_to_style_rules(child, mixins));
             }
         }
     }
@@ -500,8 +561,11 @@ fn codegen_style_rule<W: Write>(
         }
         let mut prop_decls = Vec::new();
         let mut var_decls = Vec::new();
+        let mut transitions = Vec::new();
         for declaration in &style_rule.declarations {
-            if declaration.property.starts_with("--") {
+            if declaration.property == "Transition" {
+                transitions.extend(parse_transition_value(&declaration.value));
+            } else if declaration.property.starts_with("--") {
                 var_decls.push(declaration.clone());
             } else {
                 prop_decls.push(declaration.clone());
@@ -535,6 +599,21 @@ fn codegen_style_rule<W: Write>(
 
             write!(writer, "}}\n").unwrap();
         }
+        if !transitions.is_empty() {
+            write!(writer, "{name}:SetPropertyTransition({{\n").unwrap();
+            for transition in &transitions {
+                write!(
+                    writer,
+                    "\t[\"{property}\"] = TweenInfo.new({duration}, Enum.EasingStyle.{style}, Enum.EasingDirection.{direction}),\n",
+                    property = transition.property,
+                    duration = transition.duration,
+                    style = transition.easing_style,
+                    direction = transition.easing_direction,
+                )
+                .unwrap();
+            }
+            write!(writer, "}})\n").unwrap();
+        }
     }
 
     if style_rule.children.is_empty() {
@@ -545,6 +624,85 @@ fn codegen_style_rule<W: Write>(
     for child in &style_rule.children {
         codegen_style_rule(ctx, child, name.clone(), writer);
     }
+}
+
+struct PropertyTransition {
+    property: String,
+    duration: f64,
+    easing_style: String,
+    easing_direction: String,
+}
+
+fn parse_transition_value(value: &str) -> Vec<PropertyTransition> {
+    value
+        .split(',')
+        .map(|entry| {
+            let mut tokens = entry.split_whitespace();
+            let property = tokens
+                .next()
+                .expect("Transition entry must have a property")
+                .to_string();
+
+            let mut duration = None;
+            let mut easing_style = None;
+            let mut easing_direction = None;
+
+            for token in tokens {
+                if let Some(ms) = token.strip_suffix("ms") {
+                    if let Ok(v) = ms.parse::<f64>() {
+                        duration = Some(v / 1000.0);
+                        continue;
+                    }
+                }
+                if let Some(s) = token.strip_suffix("s") {
+                    if let Ok(v) = s.parse::<f64>() {
+                        duration = Some(v);
+                        continue;
+                    }
+                }
+                if matches!(
+                    token,
+                    "Linear"
+                        | "Sine"
+                        | "Back"
+                        | "Quad"
+                        | "Quart"
+                        | "Quint"
+                        | "Bounce"
+                        | "Elastic"
+                        | "Exponential"
+                        | "Circular"
+                        | "Cubic"
+                ) {
+                    easing_style = Some(token.to_string());
+                    continue;
+                }
+                match token {
+                    "EaseIn" => {
+                        easing_direction = Some("In");
+                        continue;
+                    }
+                    "EaseOut" => {
+                        easing_direction = Some("Out");
+                        continue;
+                    }
+                    "EaseInOut" => {
+                        easing_direction = Some("InOut");
+                        continue;
+                    }
+                    _ => (),
+                }
+                easing_style = Some(token.to_string());
+            }
+
+            PropertyTransition {
+                property,
+                duration: duration.unwrap_or_else(|| 1.0),
+                easing_style: easing_style.unwrap_or_else(|| "Quad".to_string()),
+                easing_direction: easing_direction.unwrap_or_else(|| "Out").to_string(),
+            }
+        })
+        .collect()
 }
 
 struct Context {
@@ -567,12 +725,7 @@ fn codegen<W: Write>(writer: &mut W, rules: Vec<StyleRule>) {
     write!(writer, "\nreturn {name}").unwrap();
 }
 
-fn parse_to_tree(
-    file: &str,
-    file_path: &PathBuf,
-    stack: &mut Vec<(usize, Tree)>,
-    root: &mut Tree,
-) {
+fn parse_to_tree(file: &str, file_path: &PathBuf, stack: &mut Vec<(usize, Tree)>, root: &mut Tree) {
     let mut indent_style = EnforcedIndentStyle::Unknown;
     for (line_num, line) in file.lines().enumerate() {
         if is_blank(line) {
@@ -650,7 +803,9 @@ fn main() {
             parse_to_tree(&file, &file_path, &mut stack, &mut root);
         }
     }
-    let style_rules = root_tree_to_style_rules(&root);
+    let mut mixins = HashMap::new();
+    collect_mixins(&root, &mut mixins);
+    let style_rules = root_tree_to_style_rules(&root, &mixins);
     let mut file = std::fs::File::create(args.out.unwrap_or("out.lua".to_owned()))
         .expect("Failed to create output file");
     codegen(&mut file, style_rules);

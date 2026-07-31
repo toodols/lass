@@ -11,8 +11,13 @@ style_rule_0:SetProperties{
 	["TextColor3"] = Color3.fromRGB(255, 255, 255), 
 	["TextSize"] = 20, 
 	["FontFace"] = Font.new "rbxasset://fonts/families/SourceSansPro.json", 
-	["BorderSizePixel"] = 0
+	["BorderSizePixel"] = 0, 
 }
+style_rule_0:SetPropertyTransition({
+	["TextColor3"] = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	["BackgroundColor3"] = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	["BackgroundTransparency"] = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+})
 
 local style_rule_1 = Instance.new "StyleRule"
 style_rule_1.Parent = style_sheet
